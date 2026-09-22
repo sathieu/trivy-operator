@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -44,9 +45,15 @@ import (
 var (
 	cfg       *rest.Config
 	k8sClient client.Client // You'll be using this client in your tests.
-	testEnv   *envtest.Environment
-	ctx       context.Context
-	cancel    context.CancelFunc
+	// cacheReader reads straight from the manager's shared informer cache,
+	// bypassing the manager client's DisableFor list. It exists so that specs
+	// can assert what the cache actually holds.
+	cacheReader client.Reader
+	// managerReader is the client the controllers use.
+	managerReader client.Reader
+	testEnv       *envtest.Environment
+	ctx           context.Context
+	cancel        context.CancelFunc
 )
 
 func TestAPIs(t *testing.T) {
@@ -84,11 +91,24 @@ var _ = BeforeSuite(func() {
 	skipNameValidation := true
 
 	k8sManager, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:     scheme.Scheme,
+		Scheme: scheme.Scheme,
+		Client: client.Options{
+			// Use the operator's own client cache configuration rather than a
+			// copy of it, so that cache-related regressions - such as ConfigMap
+			// contents being stripped before config-audit reads them - are
+			// reproducible here and cannot drift from production.
+			Cache: operator.ClientCacheOptions(),
+		},
+		Cache: cache.Options{
+			// Likewise the production cache transform.
+			DefaultTransform: operator.CacheTransform(),
+		},
 		Controller: controllerconfig.Controller{SkipNameValidation: &skipNameValidation},
 	})
 	Expect(err).ToNot(HaveOccurred())
 	managerClient := k8sManager.GetClient()
+	managerReader = managerClient
+	cacheReader = k8sManager.GetCache()
 	compatibleObjectMapper := &kube.CompatibleObjectMapper{}
 	objectResolver := kube.NewObjectResolver(managerClient, compatibleObjectMapper)
 	Expect(err).ToNot(HaveOccurred())
@@ -126,6 +146,8 @@ var _ = BeforeSuite(func() {
 			"trivy.slow":                   "true",
 			"trivy.dbRepository":           trivy.DefaultDBRepository,
 			"trivy.useBuiltinRegoPolicies": "true",
+			"trivy.supportedConfigAuditKinds": "Workload,Service,Role,ClusterRole,NetworkPolicy," +
+				"Ingress,LimitRange,ResourceQuota,ConfigMap",
 		},
 	})
 	Expect(err).ToNot(HaveOccurred())

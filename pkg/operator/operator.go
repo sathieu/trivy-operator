@@ -8,8 +8,6 @@ import (
 	"sync"
 
 	"github.com/bluele/gcache"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -68,36 +66,10 @@ func Start(ctx context.Context, buildInfo trivyoperator.BuildInfo, operatorConfi
 		Metrics:                metricsserver.Options{BindAddress: operatorConfig.MetricsBindAddress},
 		HealthProbeBindAddress: operatorConfig.HealthProbeBindAddress,
 		Client: client.Options{
-			Cache: &client.CacheOptions{
-				DisableFor: []client.Object{
-					&corev1.Secret{},
-					&corev1.ServiceAccount{},
-				},
-			},
+			Cache: ClientCacheOptions(),
 		},
 		Cache: cache.Options{
-			DefaultTransform: func(obj any) (any, error) {
-				obj, err := cache.TransformStripManagedFields()(obj)
-				if err != nil {
-					return obj, err
-				}
-				if metaObj, ok := obj.(metav1.ObjectMetaAccessor); ok {
-					annotations := metaObj.GetObjectMeta().GetAnnotations()
-					if annotations != nil {
-						delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
-						metaObj.GetObjectMeta().SetAnnotations(annotations)
-					}
-				}
-
-				if cm, ok := obj.(*corev1.ConfigMap); ok {
-					// Strip data from ALL ConfigMaps except the two operator ConfigMaps
-					if cm.Name != trivyoperator.PoliciesConfigMapName && cm.Name != trivyoperator.TrivyConfigMapName {
-						cm.Data = nil
-						cm.BinaryData = nil
-					}
-				}
-				return obj, nil
-			},
+			DefaultTransform: CacheTransform(),
 		},
 		Controller: controllerconfig.Controller{
 			SkipNameValidation: &skipNameValidation,

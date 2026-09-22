@@ -7,8 +7,16 @@ metadata:
     app.kubernetes.io/name: trivy-operator
     app.kubernetes.io/instance: trivy-operator
 data:
-  library.kubernetes.rego: |
-    package lib.kubernetes
+  # Fixture-private copy of the kubernetes helper library.
+  #
+  # It is deliberately package lib.fixture, not lib.kubernetes: the content
+  # directory loaded by TestLoader already defines lib.kubernetes, and two
+  # modules in that package both declaring "default is_gatekeeper" is an OPA
+  # compile error. Carrying a private copy keeps this ConfigMap self-contained,
+  # so it also compiles with trivy.useBuiltinRegoPolicies=false, when the
+  # content directory is not loaded at all.
+  library.fixture.rego: |
+    package lib.fixture
 
     default is_gatekeeper = false
 
@@ -176,18 +184,12 @@ data:
     	pods[pod]
     	host_alias = pod.spec
     }
-  library.utils.rego: |
-    package lib.utils
-
-    has_key(x, k) {
-    	_ = x[k]
-    }
   policy.1_host_ipc.kinds: Workload
   policy.1_host_ipc.rego: >
     package appshield.kubernetes.KSV008
 
 
-    import data.lib.kubernetes
+    import data.lib.fixture as kubernetes
 
 
     default failHostIPC = false
